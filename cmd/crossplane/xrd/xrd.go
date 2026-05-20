@@ -19,5 +19,6 @@ package xrd
 
 // Cmd contains XRD subcommands.
 type Cmd struct {
-	Convert convertCmd `cmd:"" help:"Convert an XRD to a Kubernetes CRD."`
+	Convert  convertCmd  `cmd:"" help:"Convert an XRD to a Kubernetes CRD."`
+	Generate generateCmd `cmd:"" help:"Generate an XRD from a Composite Resource (XR) or SimpleSchema definition."`
 }
