@@ -35,6 +35,9 @@ import (
 //go:embed docs-templates/command-reference.md.tmpl
 var docsTmpl string
 
+// bqRE matches the opening of a special blockquote: > **Word:** text.
+var bqRE = regexp.MustCompile(`^> \*\*(\w+):\*\* `)
+
 type docsCmd struct {
 	OutputFile string `default:"command-reference.md" help:"Path to write the generated command-reference markdown file." name:"output-file" short:"o" type:"path"`
 
@@ -203,7 +206,6 @@ func normalizeDetail(detail string, headingLevel int) string {
 		}
 
 		// Convert special blockquotes into pretty Hugo blocks.
-		bqRE := regexp.MustCompile(`^> \*\*(\w+):\*\* `)
 		bqMatch := bqRE.FindStringSubmatch(line)
 		if bqMatch != nil {
 			// Omit the feature enablement message from the top-level command
