@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 
@@ -28,20 +29,35 @@ import (
 	pkgvalidate "github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate"
 )
 
+// Per-line markers used in text output. Lifted into named constants so
+// the line formats below read as "<marker> <message>" rather than
+// repeating the bracket literal at every call site.
 const (
-	errCannotMarshalJSON = "cannot marshal validation result as JSON"
-	errCannotMarshalYAML = "cannot marshal validation result as YAML"
-	errUnknownFormat     = "unknown output format"
+	markerSuccess = "[✓]" // resource passed validation
+	markerWarning = "[!]" // operational issue (missing schema, defaulting failure)
+	markerFail    = "[x]" // assertion failure (schema, CEL, or unknown-field error)
 )
 
 // Renderer writes a *ValidationResult to an io.Writer in some specific
-// encoding. New formats are added by implementing Renderer and registering
-// a value under an OutputFormat in renderers below.
+// encoding. Implementations are obtained via RendererFor; the package
+// exposes no other constructors so the supported set is fully closed.
 type Renderer interface {
-	Render(result *pkgvalidate.ValidationResult, w io.Writer, opts RenderOptions) error
+	Render(result *pkgvalidate.ValidationResult, w io.Writer, opts Options) error
 }
 
-// OutputFormat names a Renderer.
+// Options configures how a validation result is rendered.
+type Options struct {
+	// SkipSuccessResults suppresses per-resource success lines in text output.
+	// It has no effect on JSON or YAML output, where success entries are
+	// always part of the structured payload.
+	SkipSuccessResults bool
+}
+
+// OutputFormat names a Renderer. It is a defined string type rather than
+// a bare string so that call sites can use the symbolic constants below
+// (OutputFormatText, OutputFormatJSON, OutputFormatYAML) instead of
+// embedding raw "text"/"json"/"yaml" literals, and so the compiler
+// catches accidental cross-wiring of unrelated string flags.
 type OutputFormat string
 
 // OutputFormat values.
@@ -55,78 +71,48 @@ const (
 	OutputFormatYAML OutputFormat = "yaml"
 )
 
-// RenderOptions configures how a validation result is rendered.
-type RenderOptions struct {
-	// SkipSuccessResults suppresses per-resource success lines in text output.
-	// It has no effect on JSON or YAML output, where success entries are
-	// always part of the structured payload.
-	SkipSuccessResults bool
-}
-
-// renderers is the polymorphic registry: each known OutputFormat names a
-// Renderer value. Adding a new format means adding a type that implements
-// Renderer and one entry below — nothing else in this package needs to
-// change.
-var renderers = map[OutputFormat]Renderer{
-	OutputFormatText: textRenderer{},
-	OutputFormatJSON: jsonRenderer{},
-	OutputFormatYAML: yamlRenderer{},
-}
-
-// Renderer returns the Renderer registered for f, or an error if f is not a
-// known format. The empty string is treated as text, so callers passing the
-// zero value (e.g. struct defaults) get sensible behaviour.
-func (f OutputFormat) Renderer() (Renderer, error) {
-	if f == "" {
-		f = OutputFormatText
+// RendererFor returns the Renderer for the given format. The empty
+// string is accepted as OutputFormatText for ergonomics with
+// zero-valued config; any other unrecognised value returns an error.
+// This is the one and only boundary between a format identifier and
+// the typed Renderer dependency that downstream code receives.
+func RendererFor(format OutputFormat) (Renderer, error) {
+	switch format {
+	case OutputFormatText, "":
+		return textRenderer{}, nil
+	case OutputFormatJSON:
+		return jsonRenderer{}, nil
+	case OutputFormatYAML:
+		return yamlRenderer{}, nil
+	default:
+		return nil, errors.Errorf("unknown output format: %q", format)
 	}
-	r, ok := renderers[f]
-	if !ok {
-		return nil, errors.Errorf("%s: %q", errUnknownFormat, f)
-	}
-	return r, nil
-}
-
-// Render dispatches to the Renderer registered for f.
-func (f OutputFormat) Render(result *pkgvalidate.ValidationResult, w io.Writer, opts RenderOptions) error {
-	r, err := f.Renderer()
-	if err != nil {
-		return err
-	}
-	return r.Render(result, w, opts)
-}
-
-// RenderValidationResult writes the validation result to w in the requested
-// format. It is a free-function shim around OutputFormat.Render kept for
-// callers that prefer the procedural style.
-func RenderValidationResult(result *pkgvalidate.ValidationResult, format OutputFormat, w io.Writer, opts RenderOptions) error {
-	return format.Render(result, w, opts)
 }
 
 // jsonRenderer emits indented JSON with a trailing newline.
 type jsonRenderer struct{}
 
 // Render implements Renderer.
-func (jsonRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, _ RenderOptions) error {
+func (jsonRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, _ Options) error {
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return errors.Wrap(err, errCannotMarshalJSON)
+		return errors.Wrap(err, "cannot marshal validation result as JSON")
 	}
 	_, err = fmt.Fprintln(w, string(out))
-	return err
+	return errors.Wrap(err, "cannot write validation result")
 }
 
 // yamlRenderer emits sigs.k8s.io/yaml output.
 type yamlRenderer struct{}
 
 // Render implements Renderer.
-func (yamlRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, _ RenderOptions) error {
+func (yamlRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, _ Options) error {
 	out, err := yaml.Marshal(result)
 	if err != nil {
-		return errors.Wrap(err, errCannotMarshalYAML)
+		return errors.Wrap(err, "cannot marshal validation result as YAML")
 	}
 	_, err = fmt.Fprint(w, string(out))
-	return err
+	return errors.Wrap(err, "cannot write validation result")
 }
 
 // textRenderer emits the human-readable text format that the validate CLI
@@ -143,49 +129,51 @@ func (yamlRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, _ 
 // A trailing summary line lists totals.
 type textRenderer struct{}
 
-// Render implements Renderer.
-func (textRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, opts RenderOptions) error {
+// Render implements Renderer. The outer switch over ValidationStatus
+// dispatches per-resource emission; the per-error switch over
+// FieldErrorType lives in textErrorLine (a different enumeration
+// covering a different concern, so it earns its own helper).
+func (textRenderer) Render(result *pkgvalidate.ValidationResult, w io.Writer, opts Options) error {
 	for _, r := range result.Resources {
 		gvk := fmt.Sprintf("%s, Kind=%s", r.APIVersion, r.Kind)
+		var line string
 		switch r.Status {
 		case pkgvalidate.ValidationStatusMissingSchema:
-			if _, err := fmt.Fprintf(w, "[!] could not find CRD/XRD for: %s\n", gvk); err != nil {
-				return err
-			}
+			line = fmt.Sprintf(markerWarning+" could not find CRD/XRD for: %s\n", gvk)
 		case pkgvalidate.ValidationStatusValid:
 			if opts.SkipSuccessResults {
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "[✓] %s, %s validated successfully\n", gvk, r.Name); err != nil {
-				return err
-			}
+			line = fmt.Sprintf(markerSuccess+" %s, %s validated successfully\n", gvk, r.Name)
 		case pkgvalidate.ValidationStatusInvalid, pkgvalidate.ValidationStatusDefaultingFailed:
+			var sb strings.Builder
 			for _, e := range r.Errors {
-				if err := writeTextErrorLine(w, gvk, r.Name, e); err != nil {
-					return err
-				}
+				sb.WriteString(textErrorLine(gvk, r.Name, e))
 			}
+			line = sb.String()
+		}
+		if _, err := fmt.Fprint(w, line); err != nil {
+			return errors.Wrap(err, "cannot write validation result")
 		}
 	}
 	_, err := fmt.Fprintf(w, "Total %d resources: %d missing schemas, %d success cases, %d failure cases\n",
 		result.Summary.Total, result.Summary.MissingSchemas, result.Summary.Valid, result.Summary.Invalid)
-	return err
+	return errors.Wrap(err, "cannot write validation result")
 }
 
-// writeTextErrorLine emits a single per-error line. Defaulting failures use
-// the [!] warning prefix; schema, CEL, and unknown-field errors use [x].
-// Kept private to the textRenderer because the per-error format is a
-// detail of the text output, not part of the package's public surface.
-func writeTextErrorLine(w io.Writer, gvk, name string, e pkgvalidate.FieldValidationError) error {
+// textErrorLine returns the rendered text for a single
+// FieldValidationError. Defaulting failures use the warning marker;
+// schema, CEL, and unknown-field errors use the error marker.
+func textErrorLine(gvk, name string, e pkgvalidate.FieldValidationError) string {
 	switch e.Type {
 	case pkgvalidate.FieldErrorTypeDefaulting:
-		_, err := fmt.Fprintf(w, "[!] failed to apply defaults for %s, %s: %s\n", gvk, name, e.Message)
-		return err
+		return fmt.Sprintf(markerWarning+" failed to apply defaults for %s, %s: %s\n", gvk, name, e.Message)
 	case pkgvalidate.FieldErrorTypeCEL:
-		_, err := fmt.Fprintf(w, "[x] CEL validation error %s, %s : %s\n", gvk, name, e.Message)
-		return err
+		return fmt.Sprintf(markerFail+" CEL validation error %s, %s : %s\n", gvk, name, e.Message)
+	case pkgvalidate.FieldErrorTypeSchema, pkgvalidate.FieldErrorTypeUnknownField:
+		return fmt.Sprintf(markerFail+" schema validation error %s, %s : %s\n", gvk, name, e.Message)
 	default:
-		_, err := fmt.Fprintf(w, "[x] schema validation error %s, %s : %s\n", gvk, name, e.Message)
-		return err
+		// Breadcrumb for an unhandled FieldErrorType added without updating this switch.
+		return fmt.Sprintf(markerFail+" validation error %s, %s : %s\n", gvk, name, e.Message)
 	}
 }

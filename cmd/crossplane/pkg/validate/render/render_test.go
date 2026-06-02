@@ -94,13 +94,25 @@ func defaultingFixture() *pkgvalidate.ValidationResult {
 	}
 }
 
-// renderTextLines runs Render with the given format and options and returns
-// the non-empty lines of the resulting output. It centralises the call so
+// rendererForT resolves a Renderer through the public RendererFor API
+// and t.Fatals on error. Used by the rendering tests below; the parse
+// boundary itself has its own dedicated test.
+func rendererForT(t *testing.T, format OutputFormat) Renderer {
+	t.Helper()
+	r, err := RendererFor(format)
+	if err != nil {
+		t.Fatalf("RendererFor(%q): %v", format, err)
+	}
+	return r
+}
+
+// renderTextLines runs the named renderer against in, returning the
+// non-empty lines of the resulting output. It centralises the call so
 // individual cases can focus on assertions.
-func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format OutputFormat, opts RenderOptions) []string {
+func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format OutputFormat, opts Options) []string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := format.Render(in, &buf, opts); err != nil {
+	if err := rendererForT(t, format).Render(in, &buf, opts); err != nil {
 		t.Fatalf("Render() unexpected error: %v", err)
 	}
 	raw := strings.TrimRight(buf.String(), "\n")
@@ -110,18 +122,29 @@ func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format Outp
 	return strings.Split(raw, "\n")
 }
 
+// renderBytes runs the named renderer and returns its output as a byte
+// slice. Used by the structural JSON and YAML tests below.
+func renderBytes(t *testing.T, in *pkgvalidate.ValidationResult, format OutputFormat) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := rendererForT(t, format).Render(in, &buf, Options{}); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	return buf.Bytes()
+}
+
 // summaryLine builds the trailing summary line for the given result.
 func summaryLine(r *pkgvalidate.ValidationResult) string {
 	return fmt.Sprintf("Total %d resources: %d missing schemas, %d success cases, %d failure cases",
 		r.Summary.Total, r.Summary.MissingSchemas, r.Summary.Valid, r.Summary.Invalid)
 }
 
-func TestRenderValidationResult_Text(t *testing.T) {
+func TestRendererFor_Text(t *testing.T) {
 	cases := map[string]struct {
 		in           *pkgvalidate.ValidationResult
 		format       OutputFormat
-		opts         RenderOptions
-		wantLineSubs []string // every entry must appear as a substring of some output line, in order
+		opts         Options
+		wantLineSubs []string // every entry must appear as a substring of the output line at the same index
 	}{
 		"WithSuccess": {
 			in:     fixture(),
@@ -136,18 +159,8 @@ func TestRenderValidationResult_Text(t *testing.T) {
 		"SkipSuccess": {
 			in:     fixture(),
 			format: OutputFormatText,
-			opts:   RenderOptions{SkipSuccessResults: true},
+			opts:   Options{SkipSuccessResults: true},
 			wantLineSubs: []string{
-				"[x] schema validation error test.org/v1alpha1, Kind=Test, bad",
-				"[!] could not find CRD/XRD for: other.org/v1, Kind=Unknown",
-				summaryLine(fixture()),
-			},
-		},
-		"EmptyFormatActsAsText": {
-			in:     fixture(),
-			format: OutputFormat(""),
-			wantLineSubs: []string{
-				"[✓] test.org/v1alpha1, Kind=Test, ok",
 				"[x] schema validation error test.org/v1alpha1, Kind=Test, bad",
 				"[!] could not find CRD/XRD for: other.org/v1, Kind=Unknown",
 				summaryLine(fixture()),
@@ -179,43 +192,60 @@ func TestRenderValidationResult_Text(t *testing.T) {
 	}
 }
 
-func TestRenderValidationResult_JSON(t *testing.T) {
+func TestRendererFor_JSON(t *testing.T) {
 	in := fixture()
-	var buf bytes.Buffer
-	if err := RenderValidationResult(in, OutputFormatJSON, &buf, RenderOptions{}); err != nil {
-		t.Fatalf("RenderValidationResult(JSON) err = %v", err)
-	}
+	out := renderBytes(t, in, OutputFormatJSON)
 	var got pkgvalidate.ValidationResult
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
-		t.Fatalf("json.Unmarshal() err = %v; output was:\n%s", err, buf.String())
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("json.Unmarshal() err = %v; output was:\n%s", err, string(out))
 	}
 	if diff := cmp.Diff(*in, got); diff != "" {
 		t.Errorf("JSON round-trip mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestRenderValidationResult_YAML(t *testing.T) {
+func TestRendererFor_YAML(t *testing.T) {
 	in := fixture()
-	var buf bytes.Buffer
-	if err := RenderValidationResult(in, OutputFormatYAML, &buf, RenderOptions{}); err != nil {
-		t.Fatalf("RenderValidationResult(YAML) err = %v", err)
-	}
+	out := renderBytes(t, in, OutputFormatYAML)
 	var got pkgvalidate.ValidationResult
-	if err := yaml.Unmarshal(buf.Bytes(), &got); err != nil {
-		t.Fatalf("yaml.Unmarshal() err = %v; output was:\n%s", err, buf.String())
+	if err := yaml.Unmarshal(out, &got); err != nil {
+		t.Fatalf("yaml.Unmarshal() err = %v; output was:\n%s", err, string(out))
 	}
 	if diff := cmp.Diff(*in, got); diff != "" {
 		t.Errorf("YAML round-trip mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestRenderValidationResult_Unknown(t *testing.T) {
-	var buf bytes.Buffer
-	err := RenderValidationResult(fixture(), OutputFormat("bogus"), &buf, RenderOptions{})
-	if err == nil {
-		t.Fatal("RenderValidationResult(bogus) = nil; want non-nil error")
+// TestRendererFor_FormatBoundary covers the only failable behaviour of
+// RendererFor: the OutputFormat-to-Renderer mapping. Empty maps to the
+// text renderer; an unrecognised value returns a non-nil error.
+func TestRendererFor_FormatBoundary(t *testing.T) {
+	cases := map[string]struct {
+		in       OutputFormat
+		wantType Renderer
+		wantErr  bool
+	}{
+		"Text":         {in: OutputFormatText, wantType: textRenderer{}},
+		"JSON":         {in: OutputFormatJSON, wantType: jsonRenderer{}},
+		"YAML":         {in: OutputFormatYAML, wantType: yamlRenderer{}},
+		"EmptyIsText":  {in: "", wantType: textRenderer{}},
+		"UnknownFails": {in: OutputFormat("xml"), wantErr: true},
 	}
-	if buf.Len() != 0 {
-		t.Errorf("Unknown format wrote %d bytes; want 0 (content: %q)", buf.Len(), buf.String())
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := RendererFor(tc.in)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("RendererFor(%q) err = %v, wantErr = %v", tc.in, err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if got != nil {
+					t.Errorf("RendererFor(%q) returned non-nil Renderer %v on error", tc.in, got)
+				}
+				return
+			}
+			if fmt.Sprintf("%T", got) != fmt.Sprintf("%T", tc.wantType) {
+				t.Errorf("RendererFor(%q) = %T, want %T", tc.in, got, tc.wantType)
+			}
+		})
 	}
 }

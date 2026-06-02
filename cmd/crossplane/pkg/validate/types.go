@@ -57,8 +57,8 @@ const (
 
 // FieldValidationError represents a single field-level validation error.
 type FieldValidationError struct {
-	// Type categorizes the error (e.g. "schema", "cel", "unknownField", "defaulting").
-	Type string `json:"type"`
+	// Type categorizes the error.
+	Type FieldErrorType `json:"type"`
 	// Field is the path to the invalid field (e.g. "spec.forProvider.region").
 	Field string `json:"field,omitempty"`
 	// Message is a human-readable description of the error.
@@ -67,14 +67,19 @@ type FieldValidationError struct {
 	Value any `json:"value,omitempty"`
 }
 
-// FieldErrorType categorizes the kind of validation error.
+// FieldErrorType categorizes the kind of validation error a
+// FieldValidationError describes. The supported set is closed; producers
+// and consumers should use the named constants below.
+type FieldErrorType string
+
+// FieldErrorType values.
 const (
 	// FieldErrorTypeSchema indicates a schema validation error from OpenAPI validation.
-	FieldErrorTypeSchema = "schema"
+	FieldErrorTypeSchema FieldErrorType = "schema"
 	// FieldErrorTypeCEL indicates a CEL rule validation error.
-	FieldErrorTypeCEL = "cel"
+	FieldErrorTypeCEL FieldErrorType = "cel"
 	// FieldErrorTypeUnknownField indicates an unknown field was present in the resource.
-	FieldErrorTypeUnknownField = "unknownField"
+	FieldErrorTypeUnknownField FieldErrorType = "unknownField"
 	// FieldErrorTypeDefaulting indicates defaults could not be applied to the resource.
-	FieldErrorTypeDefaulting = "defaulting"
+	FieldErrorTypeDefaulting FieldErrorType = "defaulting"
 )

@@ -29,43 +29,41 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 )
 
-var (
-	testCRD = &extv1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apiextensions.k8s.io/v1",
-			Kind:       "CustomResourceDefinition",
+var testCRD = &extv1.CustomResourceDefinition{
+	TypeMeta: metav1.TypeMeta{
+		APIVersion: "apiextensions.k8s.io/v1",
+		Kind:       "CustomResourceDefinition",
+	},
+	ObjectMeta: metav1.ObjectMeta{
+		Name: "test",
+	},
+	Spec: extv1.CustomResourceDefinitionSpec{
+		Group: "test.org",
+		Names: extv1.CustomResourceDefinitionNames{
+			Kind:     "Test",
+			ListKind: "TestList",
+			Plural:   "tests",
+			Singular: "test",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-		},
-		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: "test.org",
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     "Test",
-				ListKind: "TestList",
-				Plural:   "tests",
-				Singular: "test",
-			},
-			Scope: "Cluster",
-			Versions: []extv1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1alpha1",
-					Served:  true,
-					Storage: true,
-					Schema: &extv1.CustomResourceValidation{
-						OpenAPIV3Schema: &extv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]extv1.JSONSchemaProps{
-								"spec": {
-									Type: "object",
-									Properties: map[string]extv1.JSONSchemaProps{
-										"replicas": {
-											Type: "integer",
-										},
+		Scope: "Cluster",
+		Versions: []extv1.CustomResourceDefinitionVersion{
+			{
+				Name:    "v1alpha1",
+				Served:  true,
+				Storage: true,
+				Schema: &extv1.CustomResourceValidation{
+					OpenAPIV3Schema: &extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"replicas": {
+										Type: "integer",
 									},
-									Required: []string{
-										"replicas",
-									},
+								},
+								Required: []string{
+									"replicas",
 								},
 							},
 						},
@@ -73,66 +71,8 @@ var (
 				},
 			},
 		},
-	}
-	testCRDWithCEL = &extv1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apiextensions.k8s.io/v1",
-			Kind:       "CustomResourceDefinition",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-		},
-		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: "test.org",
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     "Test",
-				ListKind: "TestList",
-				Plural:   "tests",
-				Singular: "test",
-			},
-			Scope: "Cluster",
-			Versions: []extv1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1alpha1",
-					Served:  true,
-					Storage: true,
-					Schema: &extv1.CustomResourceValidation{
-						OpenAPIV3Schema: &extv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]extv1.JSONSchemaProps{
-								"spec": {
-									Type: "object",
-									XValidations: extv1.ValidationRules{
-										extv1.ValidationRule{
-											Rule:    "self.minReplicas <= self.replicas && self.replicas <= self.maxReplicas",
-											Message: "replicas should be in between minReplicas and maxReplicas",
-										},
-									},
-									Properties: map[string]extv1.JSONSchemaProps{
-										"replicas": {
-											Type: "integer",
-										},
-										"minReplicas": {
-											Type: "integer",
-										},
-										"maxReplicas": {
-											Type: "integer",
-										},
-									},
-									Required: []string{
-										"replicas",
-										"minReplicas",
-										"maxReplicas",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-)
+	},
+}
 
 func TestConvertToCRDs(t *testing.T) {
 	type args struct {

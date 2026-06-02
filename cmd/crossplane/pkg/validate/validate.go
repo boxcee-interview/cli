@@ -18,7 +18,6 @@ package validate
 
 import (
 	"context"
-	"fmt"
 
 	ext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -42,6 +41,10 @@ import (
 // returned error is non-nil only for setup failures (for example, a CRD that
 // cannot be converted or compiled); per-resource validation failures are
 // reported via ResourceValidationResult.Status and .Errors, not via the error.
+//
+// Caller-owned resources are not mutated. SchemaValidate operates on a deep
+// copy of each input, so the structural defaulting and unknown-field pruning
+// it performs internally are not visible after the call returns.
 func SchemaValidate(ctx context.Context, resources []*unstructured.Unstructured, crds []*extv1.CustomResourceDefinition) (*ValidationResult, error) {
 	schemaValidators, structurals, err := newValidatorsAndStructurals(crds)
 	if err != nil {
@@ -62,19 +65,23 @@ func SchemaValidate(ctx context.Context, resources []*unstructured.Unstructured,
 // against a single resource and returns its ResourceValidationResult. It is
 // the per-resource decomposition of SchemaValidate; pulling it out keeps the
 // outer function a clean fan-out and lets each branch read top-to-bottom.
+//
+// The input resource is not mutated. validateResource takes a deep copy
+// before applyDefaults / validateUnknownFields, both of which would
+// otherwise modify the caller's r.Object in place.
 func validateResource(
 	ctx context.Context,
-	r *unstructured.Unstructured,
-	schemaValidators map[runtimeschema.GroupVersionKind][]*validation.SchemaValidator,
+	in *unstructured.Unstructured,
+	schemaValidators map[runtimeschema.GroupVersionKind]*validation.SchemaValidator,
 	structurals map[runtimeschema.GroupVersionKind]*schema.Structural,
 	crds []*extv1.CustomResourceDefinition,
 ) ResourceValidationResult {
-	gvk := r.GetObjectKind().GroupVersionKind()
+	gvk := in.GetObjectKind().GroupVersionKind()
 	rvr := ResourceValidationResult{
 		APIVersion: gvk.GroupVersion().String(),
 		Kind:       gvk.Kind,
-		Name:       getResourceName(r),
-		Namespace:  r.GetNamespace(),
+		Name:       getResourceName(in),
+		Namespace:  in.GetNamespace(),
 	}
 
 	sv, ok := schemaValidators[gvk]
@@ -83,6 +90,13 @@ func validateResource(
 		return rvr
 	}
 	s := structurals[gvk]
+
+	// Work on a copy: applyDefaults writes defaults into r.Object and
+	// validateUnknownFields prunes unknown keys from it. Mutating
+	// caller-owned manifests would make repeated validations
+	// non-deterministic and surprise downstream code that reuses the
+	// inputs.
+	r := in.DeepCopy()
 
 	// A defaulting failure is recorded as a warning-class error and does
 	// not abort validation: schema and CEL checks still run on the
@@ -96,19 +110,17 @@ func validateResource(
 		})
 	}
 
-	for _, v := range sv {
-		for _, e := range validation.ValidateCustomResource(nil, r, *v) {
-			rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeSchema))
-		}
-		for _, e := range validateUnknownFields(r.UnstructuredContent(), s) {
-			rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeUnknownField))
-		}
+	for _, e := range validation.ValidateCustomResource(nil, r, *sv) {
+		rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeSchema))
+	}
+	for _, e := range validateUnknownFields(r.UnstructuredContent(), s) {
+		rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeUnknownField))
+	}
 
-		celValidator := cel.NewValidator(s, true, celconfig.PerCallLimit)
-		celErrs, _ := celValidator.Validate(ctx, nil, s, r.Object, nil, celconfig.PerCallLimit)
-		for _, e := range celErrs {
-			rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeCEL))
-		}
+	celValidator := cel.NewValidator(s, true, celconfig.PerCallLimit)
+	celErrs, _ := celValidator.Validate(ctx, nil, s, r.Object, nil, celconfig.PerCallLimit)
+	for _, e := range celErrs {
+		rvr.Errors = append(rvr.Errors, fieldErrorToFieldValidationError(e, FieldErrorTypeCEL))
 	}
 
 	rvr.Status = statusFromErrors(rvr.Errors)
@@ -128,8 +140,14 @@ func ResultError(result *ValidationResult, errorOnMissingSchemas bool) error {
 	return nil
 }
 
-func newValidatorsAndStructurals(crds []*extv1.CustomResourceDefinition) (map[runtimeschema.GroupVersionKind][]*validation.SchemaValidator, map[runtimeschema.GroupVersionKind]*schema.Structural, error) {
-	validators := map[runtimeschema.GroupVersionKind][]*validation.SchemaValidator{}
+// newValidatorsAndStructurals compiles a single SchemaValidator and Structural
+// per (group, version, kind) declared by the input CRDs. Duplicate CRD entries
+// for the same GVK are last-wins, mirroring the behaviour of the structurals
+// map; this keeps validateResource from running schema, CEL, and
+// unknown-field checks more than once and avoids duplicated errors in the
+// reported result.
+func newValidatorsAndStructurals(crds []*extv1.CustomResourceDefinition) (map[runtimeschema.GroupVersionKind]*validation.SchemaValidator, map[runtimeschema.GroupVersionKind]*schema.Structural, error) {
+	validators := map[runtimeschema.GroupVersionKind]*validation.SchemaValidator{}
 	structurals := map[runtimeschema.GroupVersionKind]*schema.Structural{}
 
 	for i := range crds {
@@ -140,11 +158,6 @@ func newValidatorsAndStructurals(crds []*extv1.CustomResourceDefinition) (map[ru
 
 		// Top-level and per-version schemas are mutually exclusive.
 		for _, ver := range internal.Spec.Versions {
-			var (
-				sv  validation.SchemaValidator
-				err error
-			)
-
 			gvk := runtimeschema.GroupVersionKind{
 				Group:   internal.Spec.Group,
 				Version: ver.Name,
@@ -163,12 +176,12 @@ func newValidatorsAndStructurals(crds []*extv1.CustomResourceDefinition) (map[ru
 				continue
 			}
 
-			sv, _, err = validation.NewSchemaValidator(s)
+			sv, _, err := validation.NewSchemaValidator(s)
 			if err != nil {
 				return nil, nil, err
 			}
 
-			validators[gvk] = append(validators[gvk], &sv)
+			validators[gvk] = &sv
 
 			structural, err := schema.NewStructural(s)
 			if err != nil {
@@ -205,7 +218,7 @@ func statusFromErrors(errs []FieldValidationError) ValidationStatus {
 }
 
 // fieldErrorToFieldValidationError converts a k8s field.Error into our structured type.
-func fieldErrorToFieldValidationError(e *field.Error, errType string) FieldValidationError {
+func fieldErrorToFieldValidationError(e *field.Error, errType FieldErrorType) FieldValidationError {
 	out := FieldValidationError{
 		Type:    errType,
 		Field:   e.Field,
@@ -277,19 +290,19 @@ func applyDefaults(resource *unstructured.Unstructured, gvk runtimeschema.GroupV
 	}
 
 	if schemaProps == nil {
-		return fmt.Errorf("no schema found for version %s in CRD %s", gvk.Version, matchingCRD.Name)
+		return errors.Errorf("no schema found for version %s in CRD %s", gvk.Version, matchingCRD.Name)
 	}
 
 	var apiExtSchema ext.JSONSchemaProps
 
 	err := extv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(schemaProps, &apiExtSchema, nil)
 	if err != nil {
-		return fmt.Errorf("failed to convert schema: %w", err)
+		return errors.Wrap(err, "cannot convert schema")
 	}
 
 	structural, err := schema.NewStructural(&apiExtSchema)
 	if err != nil {
-		return fmt.Errorf("failed to create structural schema: %w", err)
+		return errors.Wrap(err, "cannot create structural schema")
 	}
 
 	obj := resource.UnstructuredContent()
