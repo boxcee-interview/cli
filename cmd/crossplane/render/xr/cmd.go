@@ -233,7 +233,7 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, sp terminal.SpinnerPrinte
 		if len(c.FunctionAnnotations) > 0 {
 			annotations := render.NewAnnotationsFromStrings(c.FunctionAnnotations)
 			if value, ok := annotations[render.AnnotationKeyRuntimeDockerNetwork]; ok {
-				c.EngineFlags.CrossplaneDockerNetwork = value
+				c.CrossplaneDockerNetwork = value
 			}
 		}
 	}
