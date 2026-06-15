@@ -68,7 +68,7 @@ type runCmd struct {
 	ControlPlaneName  string        `help:"Name of the dev control plane. Defaults to project name."`
 	CrossplaneVersion string        `help:"Version of Crossplane to install."`
 	RegistryDir       string        `help:"Directory for local registry images."`
-	ClusterAdmin      bool          `default:"true"                                                  help:"Allow Crossplane cluster admin." negatable:""`
+	ClusterAdmin      bool          `default:"true"                                                  help:"Grant Crossplane the cluster-admin role." negatable:""`
 	Timeout           time.Duration `default:"5m"                                                    help:"Max wait for project readiness."`
 	InitResources     []string      `help:"Resources to apply before installing."                    type:"path"`
 	ExtraResources    []string      `help:"Resources to apply after installing."                     type:"path"`
@@ -149,7 +149,7 @@ func (c *runCmd) Run(logger logging.Logger, sp terminal.SpinnerPrinter) error { 
 	concurrency := max(1, c.MaxConcurrency)
 
 	schemasFS := afero.NewBasePathFs(c.projFS, c.proj.Spec.Paths.Schemas)
-	generators := generator.AllLanguages()
+	generators := generator.Filter(generator.AllLanguages(), c.proj.Spec.Schemas.GetLanguages())
 	schemaRunner := runner.NewRealSchemaRunner(runner.WithImageConfig(c.proj.Spec.ImageConfigs))
 	schemaMgr := manager.New(schemasFS, generators, schemaRunner)
 	cacheDir := c.CacheDir

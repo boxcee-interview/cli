@@ -35,6 +35,9 @@ import (
 //go:embed docs-templates/command-reference.md.tmpl
 var docsTmpl string
 
+// bqRE matches the opening of a special blockquote: > **Word:** text.
+var bqRE = regexp.MustCompile(`^> \*\*(\w+):\*\* `)
+
 type docsCmd struct {
 	OutputFile string `default:"command-reference.md" help:"Path to write the generated command-reference markdown file." name:"output-file" short:"o" type:"path"`
 
@@ -78,6 +81,7 @@ type docsCommand struct {
 	Summary    string
 	Positional []docsPositional
 	Flags      []docsFlag
+	NoVale     []string
 }
 
 // docsInput is the top-level template input.
@@ -126,6 +130,11 @@ func buildDocsCommand(n *kong.Node) docsCommand {
 		Detail:     normalizeDetail(n.Detail, headingLevel),
 		Summary:    n.Summary(),
 	}
+
+	if n.Tag != nil && n.Tag.Get("novale") != "" {
+		dc.NoVale = strings.Split(n.Tag.Get("novale"), ",")
+	}
+
 	for _, p := range n.Positional {
 		dc.Positional = append(dc.Positional, docsPositional{
 			Display:  p.Summary(),
@@ -197,9 +206,15 @@ func normalizeDetail(detail string, headingLevel int) string {
 		}
 
 		// Convert special blockquotes into pretty Hugo blocks.
-		bqRE := regexp.MustCompile(`^> \*\*(\w+):\*\* `)
 		bqMatch := bqRE.FindStringSubmatch(line)
 		if bqMatch != nil {
+			// Omit the feature enablement message from the top-level command
+			// detail, since it's not useful in the generated docs. It's a
+			// little gross that we're hard-coding this, but it's good enough.
+			if strings.Contains(line, "Alpha and beta features are enabled.") {
+				continue
+			}
+
 			bq = true
 			fmt.Fprintf(&sb, "{{<hint \"%s\" >}}\n", strings.ToLower(bqMatch[1]))
 			line = strings.TrimPrefix(line, bqMatch[0])
@@ -225,6 +240,14 @@ func normalizeDetail(detail string, headingLevel int) string {
 		}
 
 		sb.WriteString(line + "\n")
+	}
+
+	// Close the "hint" box if it appeared at the very end of the detail.
+	if bq {
+		sb.WriteString("{{< /hint >}}\n")
+	}
+	if table {
+		sb.WriteString("{{< /table >}}\n")
 	}
 
 	return strings.TrimSpace(sb.String())

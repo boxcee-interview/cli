@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"dario.cat/mergo"
@@ -52,6 +54,7 @@ import (
 	"github.com/crossplane/cli/v2/internal/schemas/runner"
 	"github.com/crossplane/cli/v2/internal/terminal"
 	clixpkg "github.com/crossplane/cli/v2/internal/xpkg"
+	xrpkg "github.com/crossplane/cli/v2/pkg/xr"
 
 	_ "embed"
 )
@@ -64,9 +67,9 @@ type Cmd struct {
 	render.EngineFlags `prefix:""`
 
 	// Arguments.
-	CompositeResource string `arg:"" help:"A YAML file specifying the composite resource (XR) to render."                                                                                  predictor:"yaml_file" type:"existingfile"`
-	Composition       string `arg:"" help:"A YAML file specifying the Composition to use to render the XR. Must be mode: Pipeline."                                                        predictor:"yaml_file" type:"existingfile"`
-	Functions         string `arg:"" help:"A YAML file or directory of YAML files specifying the Composition Functions to use to render the XR. May be omitted when running in a project." optional:""           predictor:"yaml_file_or_directory" type:"path"`
+	CompositeResource string `arg:"" help:"A YAML file specifying the composite resource (XR) to render."                                                                            predictor:"yaml_file" type:"existingfile"`
+	Composition       string `arg:"" help:"A YAML file specifying the Composition to use to render the XR. Must be mode: Pipeline."                                                  predictor:"yaml_file" type:"existingfile"`
+	Functions         string `arg:"" help:"A YAML file or directory of YAML files specifying the Composition Functions to use to render the XR. Optional when running in a project." optional:""           predictor:"yaml_file_or_directory" type:"path"`
 
 	// Flags. Keep them in alphabetical order.
 	ContextFiles           map[string]string `help:"Comma-separated context key-value pairs to pass to the Function pipeline. Values must be files containing JSON/YAML."                           mapsep:""               predictor:"file"`
@@ -79,7 +82,7 @@ type Cmd struct {
 	RequiredSchemas        string            `help:"A directory of JSON files specifying OpenAPI v3 schemas (from kubectl get --raw /openapi/v3/<group-version>)."                                  placeholder:"DIR"       predictor:"directory"              short:"s"   type:"path"`
 	IncludeContext         bool              `help:"Include the context in the rendered output as a resource of kind: Context."                                                                     short:"c"`
 	FunctionCredentials    string            `help:"A YAML file or directory of YAML files specifying credentials to use for Functions to render the XR."                                           placeholder:"PATH"      predictor:"yaml_file_or_directory" type:"path"`
-	FunctionAnnotations    []string          `help:"Override function annotations for all functions. Can be repeated."                                                                              placeholder:"KEY=VALUE" short:"a"`
+	FunctionAnnotations    []string          `help:"Override function annotations for all functions. Provide multiple annotations by repeating the argument."                                       placeholder:"KEY=VALUE" short:"a"`
 
 	CacheDir       string        `env:"CROSSPLANE_XPKG_CACHE"                                                                                      help:"Directory for cached xpkg package contents."          name:"cache-dir"`
 	MaxConcurrency uint          `default:"8"                                                                                                      help:"Maximum concurrency for building embedded functions."`
@@ -169,13 +172,8 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, sp terminal.SpinnerPrinte
 			return errors.Wrapf(err, "cannot load XRD from %q", c.XRD)
 		}
 
-		crd, err := xcrd.ForCompositeResource(xrd)
-		if err != nil {
-			return errors.Wrapf(err, "cannot derive composite CRD from XRD %q", xrd.GetName())
-		}
-
-		if err := render.DefaultValues(xr.UnstructuredContent(), xr.GetAPIVersion(), *crd); err != nil {
-			return errors.Wrapf(err, "cannot default values for XR %q", xr.GetName())
+		if err := xrpkg.ApplyXRDDefaults(xr.GetUnstructured(), xrd); err != nil {
+			return errors.Wrapf(err, "cannot apply XRD defaults to XR %q", xr.GetName())
 		}
 	}
 
@@ -329,6 +327,31 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, sp terminal.SpinnerPrinte
 		out.CompositeResource = updatedXR
 	}
 
+	// Replace condition timestamps in the XR and any composed resources with a
+	// stable value.
+	if err := render.ReplaceConditionTimestamps(&out.CompositeResource.Unstructured); err != nil {
+		return errors.Wrap(err, "cannot replace condition timestamps in xr")
+	}
+	for i, cr := range out.ComposedResources {
+		if err := render.ReplaceConditionTimestamps(&out.ComposedResources[i].Unstructured); err != nil {
+			return errors.Wrapf(err, "cannot replace condition timestamps in composed resource %s", cr.GetName())
+		}
+	}
+
+	// Sort composite resources by composition-resource-name to ensure stable
+	// output across runs.
+	slices.SortStableFunc(out.ComposedResources, func(a, b composed.Unstructured) int {
+		nameA, nameB := "", ""
+		if anns := a.GetAnnotations(); anns != nil {
+			nameA = anns[xcrd.AnnotationKeyCompositionResourceName]
+		}
+		if anns := b.GetAnnotations(); anns != nil {
+			nameB = anns[xcrd.AnnotationKeyCompositionResourceName]
+		}
+
+		return strings.Compare(nameA, nameB)
+	})
+
 	_, _ = fmt.Fprintln(k.Stdout, "---")
 	if err := s.Encode(out.CompositeResource, k.Stdout); err != nil {
 		return errors.Wrapf(err, "cannot marshal composite resource %q to YAML", xr.GetName())
@@ -337,7 +360,7 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, sp terminal.SpinnerPrinte
 	for i := range out.ComposedResources {
 		_, _ = fmt.Fprintln(k.Stdout, "---")
 		if err := s.Encode(&out.ComposedResources[i], k.Stdout); err != nil {
-			return errors.Wrapf(err, "cannot marshal composed resource %q to YAML", out.ComposedResources[i].GetAnnotations()[render.AnnotationKeyCompositionResourceName])
+			return errors.Wrapf(err, "cannot marshal composed resource %q to YAML", out.ComposedResources[i].GetAnnotations()[xcrd.AnnotationKeyCompositionResourceName])
 		}
 	}
 

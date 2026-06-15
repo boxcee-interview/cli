@@ -43,6 +43,7 @@ import (
 	"github.com/crossplane/cli/v2/cmd/crossplane/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/version"
 	"github.com/crossplane/cli/v2/cmd/crossplane/xpkg"
+	"github.com/crossplane/cli/v2/cmd/crossplane/xr"
 	"github.com/crossplane/cli/v2/cmd/crossplane/xrd"
 	"github.com/crossplane/cli/v2/internal/config"
 	"github.com/crossplane/cli/v2/internal/maturity"
@@ -75,7 +76,7 @@ type cli struct {
 	// Subcommands.
 	Cluster     cluster.Cmd     `cmd:"" help:"Inspect a Crossplane cluster."                                            maturity:"beta"`
 	Composition composition.Cmd `cmd:"" help:"Work with Crossplane Compositions."`
-	Config      configcmd.Cmd   `cmd:"" help:"View and modify the crossplane CLI config file."`
+	Config      configcmd.Cmd   `cmd:"" help:"View and update the crossplane CLI configuration file."                   novale:"gitlab.SubstitutionWarning[\"config\"]"`
 	Dependency  dependency.Cmd  `cmd:"" help:"Manage dependencies of control plane Projects."                           maturity:"beta"`
 	Function    function.Cmd    `cmd:"" help:"Work with functions in control plane Projects."                           maturity:"beta"`
 	Operation   operation.Cmd   `cmd:"" help:"Work with Crossplane Operations."                                         maturity:"alpha"`
@@ -83,6 +84,7 @@ type cli struct {
 	Resource    resource.Cmd    `cmd:"" help:"Work with Crossplane resources."                                          maturity:"beta"`
 	Version     version.Cmd     `cmd:"" help:"Print the client and server version information for the current context."`
 	XPKG        xpkg.Cmd        `cmd:"" help:"Work with Crossplane packages."`
+	XR          xr.Cmd          `cmd:"" help:"Work with Crossplane Composite Resources (XRs)."                          maturity:"alpha"`
 	XRD         xrd.Cmd         `cmd:"" help:"Work with Crossplane Composite Resource Definitions (XRDs)."              maturity:"beta"`
 
 	// Hidden top-level alias for render, since it's GA but has moved.
@@ -92,7 +94,7 @@ type cli struct {
 	GenerateDocs docsCmd `cmd:"" help:"Generate command-reference docs in markdown format." hidden:""`
 
 	// Flags.
-	ConfigPath string      `env:"CROSSPLANE_CONFIG"                  help:"Path to the crossplane CLI config file." name:"config" placeholder:"PATH"`
+	ConfigPath string      `env:"CROSSPLANE_CONFIG"                  help:"Path to the crossplane CLI configuration file." name:"config" placeholder:"PATH"`
 	Verbose    verboseFlag `help:"Print verbose logging statements." name:"verbose"`
 
 	// Completion

@@ -20,10 +20,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -62,14 +64,20 @@ type initCmd struct {
 	Name     string `arg:"" help:"The name of the new package to initialize."`
 	Template string `arg:"" help:"The template name or URL to use to initialize the new package."`
 
-	Directory     string `default:"."                                                     help:"The directory to initialize. It must be empty. It will be created if it doesn't exist." predictor:"directory" short:"d" type:"path"`
-	RunInitScript bool   `help:"Runs the init.sh script if it exists without prompting"   name:"run-init-script"                                                                        short:"r"`
-	RefName       string `help:"The branch or tag to clone from the template repository." name:"ref-name"                                                                               short:"b"`
+	Directory     string `default:"."                                                     help:"The directory to initialize. It must be empty if it exists." predictor:"directory" short:"d" type:"path"`
+	RunInitScript bool   `help:"Runs the init.sh script if it exists without prompting"   name:"run-init-script"                                             short:"r"`
+	RefName       string `help:"The branch or tag to clone from the template repository." name:"ref-name"                                                    short:"b"`
 }
 
 func (c *initCmd) Help() string {
 	b := strings.Builder{}
-	for name, url := range WellKnownTemplates() {
+
+	// Sort the map keys to ensure stable help output.
+	tmpls := WellKnownTemplates()
+	names := slices.Sorted(maps.Keys(tmpls))
+
+	for _, name := range names {
+		url := tmpls[name]
 		fmt.Fprintf(&b, "- `%s` ([%s](%s))\n", name, url, url)
 	}
 
