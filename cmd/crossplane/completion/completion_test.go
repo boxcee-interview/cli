@@ -1,4 +1,3 @@
-// Package completion contains Crossplane CLI completions.
 package completion
 
 import (

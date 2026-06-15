@@ -78,7 +78,7 @@ func TestApply(t *testing.T) {
 	}
 }
 
-func TestApplyNilConfig(t *testing.T) {
+func TestApplyNilConfig(_ *testing.T) {
 	// Must not panic on a nil config.
 	ImpersonationFlags{As: "jane"}.Apply(nil)
 }

@@ -25,9 +25,9 @@ import "k8s.io/client-go/rest"
 // the `embed:""` tag, then call Apply on the command's *rest.Config before
 // building its client.
 type ImpersonationFlags struct {
-	As      string   `name:"as"       help:"Username to impersonate for the operation. User could be a regular user or a service account in a namespace."`
-	AsGroup []string `name:"as-group" help:"Group to impersonate for the operation, this flag can be repeated to specify multiple groups." sep:"none"`
-	AsUID   string   `name:"as-uid"   help:"UID to impersonate for the operation."`
+	As      string   `help:"Username to impersonate for the operation. User could be a regular user or a service account in a namespace." name:"as"`
+	AsGroup []string `help:"Group to impersonate for the operation, this flag can be repeated to specify multiple groups."                name:"as-group" sep:"none"`
+	AsUID   string   `help:"UID to impersonate for the operation."                                                                        name:"as-uid"`
 }
 
 // Apply sets impersonation on the given rest.Config. Unset fields and a nil cfg
