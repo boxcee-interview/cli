@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package render
+package output
 
 import (
 	"bytes"
@@ -26,7 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/yaml"
 
-	pkgvalidate "github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 )
 
 // fixture returns a ValidationResult covering a valid, an invalid, and a
@@ -97,7 +97,7 @@ func defaultingFixture() *pkgvalidate.ValidationResult {
 // rendererForT resolves a Renderer through the public RendererFor API
 // and t.Fatals on error. Used by the rendering tests below; the parse
 // boundary itself has its own dedicated test.
-func rendererForT(t *testing.T, format OutputFormat) Renderer {
+func rendererForT(t *testing.T, format Format) Renderer {
 	t.Helper()
 	r, err := RendererFor(format)
 	if err != nil {
@@ -109,7 +109,7 @@ func rendererForT(t *testing.T, format OutputFormat) Renderer {
 // renderTextLines runs the named renderer against in, returning the
 // non-empty lines of the resulting output. It centralises the call so
 // individual cases can focus on assertions.
-func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format OutputFormat, opts Options) []string {
+func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format Format, opts Options) []string {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := rendererForT(t, format).Render(in, &buf, opts); err != nil {
@@ -124,7 +124,7 @@ func renderTextLines(t *testing.T, in *pkgvalidate.ValidationResult, format Outp
 
 // renderBytes runs the named renderer and returns its output as a byte
 // slice. Used by the structural JSON and YAML tests below.
-func renderBytes(t *testing.T, in *pkgvalidate.ValidationResult, format OutputFormat) []byte {
+func renderBytes(t *testing.T, in *pkgvalidate.ValidationResult, format Format) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := rendererForT(t, format).Render(in, &buf, Options{}); err != nil {
@@ -142,13 +142,13 @@ func summaryLine(r *pkgvalidate.ValidationResult) string {
 func TestRendererFor_Text(t *testing.T) {
 	cases := map[string]struct {
 		in           *pkgvalidate.ValidationResult
-		format       OutputFormat
+		format       Format
 		opts         Options
 		wantLineSubs []string // every entry must appear as a substring of the output line at the same index
 	}{
 		"WithSuccess": {
 			in:     fixture(),
-			format: OutputFormatText,
+			format: FormatText,
 			wantLineSubs: []string{
 				"[✓] test.org/v1alpha1, Kind=Test, ok",
 				"[x] schema validation error test.org/v1alpha1, Kind=Test, bad",
@@ -158,7 +158,7 @@ func TestRendererFor_Text(t *testing.T) {
 		},
 		"SkipSuccess": {
 			in:     fixture(),
-			format: OutputFormatText,
+			format: FormatText,
 			opts:   Options{SkipSuccessResults: true},
 			wantLineSubs: []string{
 				"[x] schema validation error test.org/v1alpha1, Kind=Test, bad",
@@ -168,7 +168,7 @@ func TestRendererFor_Text(t *testing.T) {
 		},
 		"DefaultingMixed": {
 			in:     defaultingFixture(),
-			format: OutputFormatText,
+			format: FormatText,
 			wantLineSubs: []string{
 				"[!] failed to apply defaults for test.org/v1alpha1, Kind=Test, warn-only",
 				"[!] failed to apply defaults for test.org/v1alpha1, Kind=Test, mixed",
@@ -194,7 +194,7 @@ func TestRendererFor_Text(t *testing.T) {
 
 func TestRendererFor_JSON(t *testing.T) {
 	in := fixture()
-	out := renderBytes(t, in, OutputFormatJSON)
+	out := renderBytes(t, in, FormatJSON)
 	var got pkgvalidate.ValidationResult
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("json.Unmarshal() err = %v; output was:\n%s", err, string(out))
@@ -206,7 +206,7 @@ func TestRendererFor_JSON(t *testing.T) {
 
 func TestRendererFor_YAML(t *testing.T) {
 	in := fixture()
-	out := renderBytes(t, in, OutputFormatYAML)
+	out := renderBytes(t, in, FormatYAML)
 	var got pkgvalidate.ValidationResult
 	if err := yaml.Unmarshal(out, &got); err != nil {
 		t.Fatalf("yaml.Unmarshal() err = %v; output was:\n%s", err, string(out))
@@ -217,19 +217,19 @@ func TestRendererFor_YAML(t *testing.T) {
 }
 
 // TestRendererFor_FormatBoundary covers the only failable behaviour of
-// RendererFor: the OutputFormat-to-Renderer mapping. Empty maps to the
+// RendererFor: the Format-to-Renderer mapping. Empty maps to the
 // text renderer; an unrecognised value returns a non-nil error.
 func TestRendererFor_FormatBoundary(t *testing.T) {
 	cases := map[string]struct {
-		in       OutputFormat
+		in       Format
 		wantType Renderer
 		wantErr  bool
 	}{
-		"Text":         {in: OutputFormatText, wantType: textRenderer{}},
-		"JSON":         {in: OutputFormatJSON, wantType: jsonRenderer{}},
-		"YAML":         {in: OutputFormatYAML, wantType: yamlRenderer{}},
+		"Text":         {in: FormatText, wantType: textRenderer{}},
+		"JSON":         {in: FormatJSON, wantType: jsonRenderer{}},
+		"YAML":         {in: FormatYAML, wantType: yamlRenderer{}},
 		"EmptyIsText":  {in: "", wantType: textRenderer{}},
-		"UnknownFails": {in: OutputFormat("xml"), wantErr: true},
+		"UnknownFails": {in: Format("xml"), wantErr: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -32,8 +32,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/version"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/load"
-	pkgvalidate "github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate"
-	"github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate/render"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
+	"github.com/crossplane/cli/v2/pkg/validate/output"
 
 	_ "embed"
 )
@@ -45,8 +45,8 @@ var helpDetail string
 // validate command writes to its output writer.
 const errWriteOutput = "cannot write output"
 
-// rendererFlag adapts render.RendererFor to Kong's MapperValue interface
-// so the --output flag is decoded straight into a typed render.Renderer
+// rendererFlag adapts output.RendererFor to Kong's MapperValue interface
+// so the --output flag is decoded straight into a typed output.Renderer
 // at parse time. Cmd then carries the resolved renderer as a dependency
 // instead of a format identifier.
 //
@@ -54,7 +54,7 @@ const errWriteOutput = "cannot write output"
 // render so the render package stays free of any kong dependency and
 // can be imported by non-CLI consumers like crossplane-diff.
 type rendererFlag struct {
-	render.Renderer
+	output.Renderer
 }
 
 // Decode implements kong.MapperValue.
@@ -63,7 +63,7 @@ func (f *rendererFlag) Decode(ctx *kong.DecodeContext) error {
 	if err := ctx.Scan.PopValueInto("output", &s); err != nil {
 		return err
 	}
-	r, err := render.RendererFor(render.OutputFormat(s))
+	r, err := output.RendererFor(output.Format(s))
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (c *Cmd) Run(k *kong.Context, _ logging.Logger) error {
 		return errors.Wrapf(err, "cannot validate resources")
 	}
 
-	if err := c.Output.Render(result, k.Stdout, render.Options{SkipSuccessResults: c.SkipSuccessResults}); err != nil {
+	if err := c.Output.Render(result, k.Stdout, output.Options{SkipSuccessResults: c.SkipSuccessResults}); err != nil {
 		return errors.Wrap(err, "cannot render validation result")
 	}
 

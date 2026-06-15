@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package render writes *validate.ValidationResult values in text, JSON or
+// Package output writes *validate.ValidationResult values in text, JSON or
 // YAML form. It is intentionally separate from the parent validate package so
 // that programmatic consumers can depend on validation data without pulling
 // in YAML/JSON encoding dependencies.
-package render
+package output

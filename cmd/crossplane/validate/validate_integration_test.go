@@ -27,7 +27,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	pkgvalidate "github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 )
 
 // parseCmd parses the given CLI args through Kong and returns the

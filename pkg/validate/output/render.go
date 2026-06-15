@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package render
+package output
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	pkgvalidate "github.com/crossplane/cli/v2/cmd/crossplane/pkg/validate"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 )
 
 // Per-line markers used in text output. Lifted into named constants so
@@ -53,36 +53,36 @@ type Options struct {
 	SkipSuccessResults bool
 }
 
-// OutputFormat names a Renderer. It is a defined string type rather than
+// Format names a Renderer. It is a defined string type rather than
 // a bare string so that call sites can use the symbolic constants below
-// (OutputFormatText, OutputFormatJSON, OutputFormatYAML) instead of
+// (FormatText, FormatJSON, FormatYAML) instead of
 // embedding raw "text"/"json"/"yaml" literals, and so the compiler
 // catches accidental cross-wiring of unrelated string flags.
-type OutputFormat string
+type Format string
 
-// OutputFormat values.
+// Format values.
 const (
-	// OutputFormatText renders results in human-readable text format with
+	// FormatText renders results in human-readable text format with
 	// [x], [!], [✓] markers.
-	OutputFormatText OutputFormat = "text"
-	// OutputFormatJSON renders results as JSON.
-	OutputFormatJSON OutputFormat = "json"
-	// OutputFormatYAML renders results as YAML.
-	OutputFormatYAML OutputFormat = "yaml"
+	FormatText Format = "text"
+	// FormatJSON renders results as JSON.
+	FormatJSON Format = "json"
+	// FormatYAML renders results as YAML.
+	FormatYAML Format = "yaml"
 )
 
 // RendererFor returns the Renderer for the given format. The empty
-// string is accepted as OutputFormatText for ergonomics with
+// string is accepted as FormatText for ergonomics with
 // zero-valued config; any other unrecognised value returns an error.
 // This is the one and only boundary between a format identifier and
 // the typed Renderer dependency that downstream code receives.
-func RendererFor(format OutputFormat) (Renderer, error) {
+func RendererFor(format Format) (Renderer, error) {
 	switch format {
-	case OutputFormatText, "":
+	case FormatText, "":
 		return textRenderer{}, nil
-	case OutputFormatJSON:
+	case FormatJSON:
 		return jsonRenderer{}, nil
-	case OutputFormatYAML:
+	case FormatYAML:
 		return yamlRenderer{}, nil
 	default:
 		return nil, errors.Errorf("unknown output format: %q", format)
