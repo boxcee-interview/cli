@@ -103,14 +103,12 @@ func BuildWithDependencyManager(m *dependency.Manager) BuilderOption {
 	}
 }
 
-// BuildWithTempDir sets the directory into which the builder decompresses
-// gzipped function runtime tarballs. The returned images may read from these
-// files lazily, so the caller owns the directory and must remove it only after
-// it has finished consuming the images.
+// BuildWithTempDir sets a directory the builder can use to hold temporary
+// files. The images returned from Build() may depend on this directory, so
+// callers should not remove it until they have finished consuming the images.
 //
-// If unset, the decompressed tarballs are written to the OS default temporary
-// directory and are not removed; callers that build gzipped tarball functions
-// should set this to a directory they delete.
+// If unset, the OS default temporary directory is to hold temporary files,
+// which are not cleaned up by the builder.
 func BuildWithTempDir(dir string) BuilderOption {
 	return func(b *Builder) {
 		b.tempDir = dir
