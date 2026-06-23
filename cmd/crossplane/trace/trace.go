@@ -41,6 +41,7 @@ import (
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource/xrm"
 	"github.com/crossplane/cli/v2/cmd/crossplane/internal"
 	"github.com/crossplane/cli/v2/cmd/crossplane/trace/internal/printer"
+	"github.com/crossplane/cli/v2/internal/kube"
 
 	_ "embed"
 )
@@ -79,6 +80,8 @@ type Cmd struct {
 	ShowPackageRuntimeConfigs bool   `default:"false"                               help:"Show package runtime configs in the output." name:"show-package-runtime-configs"`
 	Concurrency               int    `default:"5"                                   help:"load concurrency"                            name:"concurrency"`
 	Watch                     bool   `default:"false"                               help:"Watch for changes until resource deletion."  name:"watch"                                                               short:"w"`
+
+	Impersonation kube.ImpersonationFlags `embed:""`
 }
 
 // Help returns help message for the trace command.
@@ -96,6 +99,8 @@ func (c *Cmd) setupKubeClient(logger logging.Logger) (clientcmd.ClientConfig, cl
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, errKubeConfig)
 	}
+
+	c.Impersonation.Apply(kubeconfig)
 
 	// NOTE(phisco): We used to get them set as part of
 	// https://github.com/kubernetes-sigs/controller-runtime/blob/2e9781e9fc6054387cf0901c70db56f0b0a63083/pkg/client/config/config.go#L96,
