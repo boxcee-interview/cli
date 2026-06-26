@@ -42,12 +42,15 @@ type Engine interface {
 	// can reach the render engine. It may mutate fns.
 	//
 	// Setup may be called more than once on the same engine to integrate
-	// additional functions into an environment created by a prior call. The
-	// first call initializes the environment (e.g. creates the Docker
-	// network) and returns a real cleanup; subsequent calls integrate the
-	// supplied fns and return a no-op cleanup. The single real cleanup must
-	// be called when rendering is done; callers can safely defer every
-	// returned cleanup in LIFO order without coordinating which one is real.
+	// additional functions into an environment created by a prior call.
+	// Only the call that creates a new environment returns a real cleanup;
+	// calls that integrate fns into an environment that already exists
+	// (because a prior Setup call established it, or because the engine was
+	// pre-configured to use an externally-managed environment) return a
+	// no-op cleanup, as do calls on engines with nothing to clean up. The
+	// real cleanup, if any, must be called when rendering is done; callers
+	// can safely defer every returned cleanup in LIFO order without
+	// coordinating which one is real.
 	Setup(ctx context.Context, fns []pkgv1.Function) (cleanup func(), err error)
 
 	// Render executes the render request and returns the response.

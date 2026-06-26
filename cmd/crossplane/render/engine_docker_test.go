@@ -216,137 +216,132 @@ func TestDockerRenderEngineRender(t *testing.T) {
 
 func TestDockerRenderEngineSetup(t *testing.T) {
 	// These cases all exercise the early-return branch of Setup — where
-	// e.network is already non-empty (set by a prior Setup call on the same
-	// engine, or by NewEngineFromFlags from the --crossplane-docker-network
-	// flag). The branch must annotate the supplied functions so their
-	// containers join the network, while never creating a second network and
-	// always returning a no-op cleanup. The create-new-network branch is not
-	// covered here because it depends on a live Docker daemon; the tests for
-	// the broader render commands exercise it integration-style.
+	// e.network is already non-empty, either because NewEngineFromFlags
+	// populated it from --crossplane-docker-network or because a prior Setup
+	// call on the same engine stored its created network there. The branch
+	// must annotate the supplied functions so their containers join the
+	// network, never create a second network, and always return a no-op
+	// cleanup. The create-new-network branch is not covered here because it
+	// depends on a live Docker daemon; the broader render command tests
+	// exercise it integration-style.
+	//
+	// The MultiBatchAnnotatesAdditionalFunctions case simulates the
+	// in-process multi-composition use case from crossplane/cli#96: a
+	// downstream tool (crossplane-diff) calls Setup once per Composition it
+	// encounters. Pre-seeding e.network stands in for the prior Setup call
+	// that would have created the network, keeping the test hermetic.
 	const presetNetwork = "preset-net"
 
-	type want struct {
-		fns           []pkgv1.Function
-		cleanupNotNil bool
+	// batch holds a single Setup invocation: the fns to pass in and the
+	// expected fn state after Setup returns. Multi-call cases provide more
+	// than one batch; the runner invokes Setup once per batch in order.
+	type batch struct {
+		fns     []pkgv1.Function
+		wantFns []pkgv1.Function
 	}
 
 	cases := map[string]struct {
-		reason string
-		engine *dockerRenderEngine
-		fns    []pkgv1.Function
-		want   want
+		reason  string
+		engine  *dockerRenderEngine
+		batches []batch
 	}{
 		"AnnotatesFunctionsWhenNetworkPreset": {
 			reason: "When e.network is set, Setup must inject the network annotation on every fn that does not already carry one, so that crossplane-diff-style multi-batch callers can re-Setup to add new fns to the same network.",
 			engine: &dockerRenderEngine{network: presetNetwork, log: logging.NewNopLogger()},
-			fns: []pkgv1.Function{
-				functionWithAnnotations(nil),
-				functionWithAnnotations(nil),
-			},
-			want: want{
+			batches: []batch{{
 				fns: []pkgv1.Function{
+					functionWithAnnotations(nil),
+					functionWithAnnotations(nil),
+				},
+				wantFns: []pkgv1.Function{
 					functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: presetNetwork}),
 					functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: presetNetwork}),
 				},
-				cleanupNotNil: true,
-			},
+			}},
 		},
 		"PreservesUserSetFunctionAnnotation": {
 			reason: "If a fn already carries a runtime-docker-network annotation, Setup must not overwrite it. This preserves the don't-overwrite contract from PR #65 for users who pin their fns to a specific network.",
 			engine: &dockerRenderEngine{network: presetNetwork, log: logging.NewNopLogger()},
-			fns: []pkgv1.Function{
-				functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: "user-pinned-net"}),
-			},
-			want: want{
+			batches: []batch{{
 				fns: []pkgv1.Function{
 					functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: "user-pinned-net"}),
 				},
-				cleanupNotNil: true,
-			},
+				wantFns: []pkgv1.Function{
+					functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: "user-pinned-net"}),
+				},
+			}},
+		},
+		"NilFunctionsList": {
+			reason: "A nil fns slice is a boundary case: Setup must succeed without panicking on the nil-map guard inside injectNetworkAnnotation.",
+			engine: &dockerRenderEngine{network: presetNetwork, log: logging.NewNopLogger()},
+			batches: []batch{{
+				fns:     nil,
+				wantFns: nil,
+			}},
 		},
 		"EmptyFunctionsList": {
-			reason: "An empty fns slice is the trivial boundary case: Setup must succeed and return a non-nil (no-op) cleanup. No panic on nil annotations map.",
+			reason: "An empty (non-nil) fns slice is the other boundary: Setup must succeed, the slice stays empty, and no spurious entries appear.",
 			engine: &dockerRenderEngine{network: presetNetwork, log: logging.NewNopLogger()},
-			fns:    nil,
-			want: want{
-				fns:           nil,
-				cleanupNotNil: true,
+			batches: []batch{{
+				fns:     []pkgv1.Function{},
+				wantFns: []pkgv1.Function{},
+			}},
+		},
+		"MultiBatchAnnotatesAdditionalFunctions": {
+			reason: "Two consecutive Setup calls on the same engine — the crossplane/cli#96 in-process multi-composition pattern — must annotate every batch with the same network. Each call returns a no-op cleanup that is safe to defer in LIFO order.",
+			engine: &dockerRenderEngine{network: presetNetwork, log: logging.NewNopLogger()},
+			batches: []batch{
+				{
+					fns: []pkgv1.Function{
+						functionWithAnnotations(nil),
+						functionWithAnnotations(nil),
+					},
+					wantFns: []pkgv1.Function{
+						functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: presetNetwork}),
+						functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: presetNetwork}),
+					},
+				},
+				{
+					fns: []pkgv1.Function{
+						functionWithAnnotations(nil),
+					},
+					wantFns: []pkgv1.Function{
+						functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: presetNetwork}),
+					},
+				},
 			},
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			cleanup, err := tc.engine.Setup(context.Background(), tc.fns)
-			if err != nil {
-				t.Fatalf("\n%s\nSetup(...): unexpected error: %v", tc.reason, err)
-			}
-			if tc.want.cleanupNotNil && cleanup == nil {
-				t.Fatalf("\n%s\nSetup(...): cleanup is nil, want non-nil", tc.reason)
-			}
-			// Cleanup must not panic. For the early-return branch it is a no-op,
-			// but exercising the call documents the contract.
-			cleanup()
+			cleanups := make([]func(), 0, len(tc.batches))
+			for i, b := range tc.batches {
+				cleanup, err := tc.engine.Setup(context.Background(), b.fns)
+				if err != nil {
+					t.Fatalf("\n%s\nSetup(batch %d): unexpected error: %v", tc.reason, i, err)
+				}
+				if cleanup == nil {
+					t.Fatalf("\n%s\nSetup(batch %d): cleanup is nil, want non-nil", tc.reason, i)
+				}
+				cleanups = append(cleanups, cleanup)
 
-			if diff := cmp.Diff(tc.want.fns, tc.fns); diff != "" {
-				t.Errorf("\n%s\nSetup(...): fns -want, +got:\n%s", tc.reason, diff)
+				if diff := cmp.Diff(b.wantFns, b.fns); diff != "" {
+					t.Errorf("\n%s\nSetup(batch %d): fns -want, +got:\n%s", tc.reason, i, diff)
+				}
+			}
+
+			// Defer-LIFO: all cleanups in this test are no-ops (we pre-seed
+			// e.network, so no call took the create-network branch). Calling
+			// them must not panic.
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				cleanups[i]()
 			}
 
 			if tc.engine.network != presetNetwork {
 				t.Errorf("\n%s\nSetup(...): e.network mutated from %q to %q (early-return branch must not change it)", tc.reason, presetNetwork, tc.engine.network)
 			}
 		})
-	}
-}
-
-func TestDockerRenderEngineSetupMultiBatch(t *testing.T) {
-	// Simulates the in-process multi-composition use case from
-	// crossplane/cli#96: a downstream tool (crossplane-diff) calls Setup once
-	// per Composition it encounters. The first call creates the network; each
-	// subsequent call must annotate its new fns with the same network so all
-	// function containers can reach each other and the render container.
-	//
-	// We seed e.network to "first-batch-net" to stand in for the prior Setup
-	// call that would have created the network. This keeps the test
-	// hermetic (no Docker daemon required) while still exercising the
-	// multi-batch path that motivated this change.
-	const network = "first-batch-net"
-
-	e := &dockerRenderEngine{network: network, log: logging.NewNopLogger()}
-
-	batch1 := []pkgv1.Function{functionWithAnnotations(nil), functionWithAnnotations(nil)}
-	batch2 := []pkgv1.Function{functionWithAnnotations(nil)}
-
-	cleanup1, err := e.Setup(context.Background(), batch1)
-	if err != nil {
-		t.Fatalf("Setup(batch1): unexpected error: %v", err)
-	}
-	cleanup2, err := e.Setup(context.Background(), batch2)
-	if err != nil {
-		t.Fatalf("Setup(batch2): unexpected error: %v", err)
-	}
-
-	// Both cleanups are no-ops here (e.network was pre-set, so neither Setup
-	// call created a network). Calling them in defer-LIFO order must not
-	// panic. In a real caller, the very first Setup — the one that actually
-	// created the network — would return the real cleanup; we cannot exercise
-	// that path without Docker.
-	cleanup2()
-	cleanup1()
-
-	wantBatch1 := []pkgv1.Function{
-		functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: network}),
-		functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: network}),
-	}
-	wantBatch2 := []pkgv1.Function{
-		functionWithAnnotations(map[string]string{AnnotationKeyRuntimeDockerNetwork: network}),
-	}
-
-	if diff := cmp.Diff(wantBatch1, batch1); diff != "" {
-		t.Errorf("Setup(batch1): fns -want, +got:\n%s", diff)
-	}
-	if diff := cmp.Diff(wantBatch2, batch2); diff != "" {
-		t.Errorf("Setup(batch2): fns -want, +got:\n%s", diff)
 	}
 }
 
