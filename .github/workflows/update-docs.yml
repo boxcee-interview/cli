@@ -2,8 +2,6 @@ name: Update CLI Docs
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
@@ -12,6 +10,9 @@ permissions:
 
 jobs:
   update-docs:
+    concurrency:
+      group: update-cli-docs
+      cancel-in-progress: true
     permissions:
       contents: write
       pull-requests: write
@@ -51,7 +52,9 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
+            # Strip 'v' prefix and patch version (e.g. v2.4.1 -> 2.4)
             DIR_NAME="${VERSION#v}"
+            DIR_NAME="${DIR_NAME%.*}"
             echo "dir=content/cli/${DIR_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "dir=content/cli/master" >> "$GITHUB_OUTPUT"
@@ -62,7 +65,7 @@ jobs:
           mkdir -p docs/${{ steps.target.outputs.dir }}
           cp generated-docs/command-reference.md docs/${{ steps.target.outputs.dir }}/command-reference.md
           cd docs
-          if ! git diff --quiet; then
+          if [[ -n "$(git status --porcelain)" ]]; then
             echo "docs-changed=true" >> "$GITHUB_ENV"
           fi
 
